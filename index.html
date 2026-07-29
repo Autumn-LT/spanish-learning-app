@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>西班牙语学习 - A1阶段</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <!-- 顶部导航 -->
+    <header class="app-header">
+        <div class="header-left">
+            <button id="menuToggle" class="icon-btn">☰</button>
+            <h1 class="app-title">🇪🇸 西语学习</h1>
+        </div>
+        <div class="header-right">
+            <span id="streakDisplay" class="streak-badge">🔥 0</span>
+        </div>
+    </header>
+
+    <!-- 侧边导航 -->
+    <nav id="sideNav" class="side-nav">
+        <div class="nav-header">
+            <h2>课程导航</h2>
+            <button id="navClose" class="icon-btn">✕</button>
+        </div>
+        <ul class="nav-list">
+            <li data-page="daily" class="active"><a href="#">📅 今日课程</a></li>
+            <li data-page="words"><a href="#">📝 单词记忆</a></li>
+            <li data-page="quiz"><a href="#">✍️ 随堂测验</a></li>
+            <li data-page="review"><a href="#">📊 阶段复习</a></li>
+            <li data-page="calendar"><a href="#">📆 学习日历</a></li>
+            <li data-page="settings"><a href="#">⚙️ 设置</a></li>
+        </ul>
+        <div class="nav-footer">
+            <span id="currentLevel">A1 - 初级阶段</span>
+        </div>
+    </nav>
+
+    <!-- 遮罩层 -->
+    <div id="overlay" class="overlay"></div>
+
+    <!-- 主内容区 -->
+    <main id="mainContent" class="main-content">
+        <!-- 今日课程页面 -->
+        <section id="page-daily" class="page active">
+            <div class="page-header">
+                <h2>📅 今日课程</h2>
+                <span id="todayDate" class="date-label"></span>
+            </div>
+            <div id="dailyContent">
+                <!-- 动态渲染 -->
+            </div>
+        </section>
+
+        <!-- 单词记忆页面 -->
+        <section id="page-words" class="page">
+            <div class="page-header">
+                <h2>📝 单词记忆</h2>
+                <div class="tab-bar">
+                    <button class="tab-btn active" data-mode="card">卡片模式</button>
+                    <button class="tab-btn" data-mode="guess">看词猜意</button>
+                    <button class="tab-btn" data-mode="fill">填空模式</button>
+                </div>
+            </div>
+            <div id="wordsContent">
+                <!-- 动态渲染 -->
+            </div>
+        </section>
+
+        <!-- 随堂测验页面 -->
+        <section id="page-quiz" class="page">
+            <div class="page-header">
+                <h2>✍️ 随堂测验</h2>
+                <div class="tab-bar">
+                    <button class="tab-btn active" data-quiz="daily">每日测验</button>
+                    <button class="tab-btn" data-quiz="stage">阶段测验</button>
+                </div>
+            </div>
+            <div id="quizContent">
+                <div class="quiz-placeholder">
+                    <p>选择测验类型后点击下方按钮开始。</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- 阶段复习页面 -->
+        <section id="page-review" class="page">
+            <div class="page-header">
+                <h2>📊 阶段复习</h2>
+                <p class="page-desc">完成每个CEFR等级后的综合练习</p>
+            </div>
+            <div id="reviewContent">
+                <!-- 动态渲染 -->
+            </div>
+        </section>
+
+        <!-- 学习日历页面 -->
+        <section id="page-calendar" class="page">
+            <div class="page-header">
+                <h2>📆 学习日历</h2>
+                <div class="calendar-nav">
+                    <button id="prevMonth" class="icon-btn">◀</button>
+                    <span id="calendarMonthYear"></span>
+                    <button id="nextMonth" class="icon-btn">▶</button>
+                </div>
+            </div>
+            <div id="calendarContent">
+                <!-- 动态渲染 -->
+            </div>
+            <div class="stats-summary">
+                <h3>学习统计</h3>
+                <div id="statsContent"></div>
+            </div>
+        </section>
+
+        <!-- 设置页面 -->
+        <section id="page-settings" class="page">
+            <div class="page-header">
+                <h2>⚙️ 设置</h2>
+            </div>
+            <div id="settingsContent">
+                <div class="setting-item">
+                    <label>语音语速</label>
+                    <input type="range" id="speechRate" min="0.5" max="1.5" step="0.1" value="0.9">
+                    <span id="speechRateValue">0.9</span>
+                </div>
+                <div class="setting-item">
+                    <label>每日学习提醒</label>
+                    <input type="checkbox" id="dailyReminder">
+                </div>
+                <div class="setting-item">
+                    <button id="resetProgress" class="btn danger">重置所有进度</button>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- 底部导航 (移动端) -->
+    <nav class="bottom-nav">
+        <button data-page="daily" class="active">📅<span>今日</span></button>
+        <button data-page="words">📝<span>单词</span></button>
+        <button data-page="quiz">✍️<span>测验</span></button>
+        <button data-page="calendar">📆<span>日历</span></button>
+    </nav>
+
+    <!-- 悬浮笔记本按钮 -->
+    <button id="notebookToggle" class="notebook-fab" title="笔记本">📝</button>
+
+    <!-- 笔记本遮罩 -->
+    <div id="notebookOverlay" class="notebook-overlay"></div>
+
+    <!-- 笔记本面板 -->
+    <div id="notebookPanel" class="notebook-panel">
+        <div class="notebook-header">
+            <h3 id="notebookCount">今日笔记 (0)</h3>
+            <button id="notebookClose" class="icon-btn">✕</button>
+        </div>
+        <div class="notebook-body">
+            <div id="notebookList"></div>
+        </div>
+        <div class="notebook-footer">
+            <textarea id="notebookInput" class="notebook-input" placeholder="输入笔记...&#10;支持格式：hola = 你好（会自动生成测验题）" rows="2"></textarea>
+            <button id="notebookAddBtn" class="btn primary">保存</button>
+        </div>
+    </div>
+
+    <script src="js/data.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>
