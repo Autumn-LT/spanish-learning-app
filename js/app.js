@@ -1260,8 +1260,9 @@ function renderOCR() {
     ocrImageData = null;
 
     let html = `<div class="ocr-tip">
-        📸 上传课本截图、单词表照片或任何包含西班牙语文字的图片。<br>
-        系统将使用 <strong>Tesseract.js</strong> 在浏览器本地进行OCR识别（<strong>西班牙语</strong>语言包），不会上传到任何服务器。
+        📸 上传课本截图、单词表照片（推荐表格格式：左西语 + 右中文）。<br>
+        系统将使用 <strong>Tesseract.js</strong> 同时加载 <strong>西班牙语 + 简体中文</strong> 语言包进行识别，<br>
+        自动按行配对「西语词 ↔ 中文释义」，识别结果可逐条确认后再加入词库。
     </div>`;
 
     // 文件上传区域
@@ -1407,12 +1408,12 @@ async function preprocessAndRunOCR(imageDataUrl) {
     const container = document.getElementById('ocrContent');
     if (!container) return;
 
-    // 显示加载动画
+    // 显示加载动画（增加语言包下载阶段提示）
     container.innerHTML = `<div class="ocr-loading" id="ocrLoading">
         <div class="ocr-loading-spinner"></div>
         <div class="ocr-loading-text">🖼️ 正在预处理图片...</div>
         <div class="ocr-loading-progress" id="ocrProgress">灰度化 + 对比度增强</div>
-        <div style="margin-top:16px;font-size:12px;color:var(--text-secondary);">图片预处理完成后将自动开始文字识别</div>
+        <div style="margin-top:16px;font-size:12px;color:var(--text-secondary);">完成后将加载西班牙语 + 简体中文两个语言包识别</div>
     </div>`;
 
     // 构建预览HTML
@@ -1422,25 +1423,34 @@ async function preprocessAndRunOCR(imageDataUrl) {
         <input type="file" class="ocr-file-input" id="ocrFileInput" accept="image/*" onchange="handleOCRFile(event)">
     </div>`;
 
+    // 更新进度的辅助函数
+    function setProgress(text) {
+        const el = document.getElementById('ocrProgress');
+        if (el) el.textContent = text;
+    }
+    function setLoadingText(text) {
+        const el = document.querySelector('.ocr-loading-text');
+        if (el) el.textContent = text;
+    }
+
     try {
         // 1. 预处理图片
+        setProgress('灰度化 + 对比度增强...');
         const processedDataUrl = await preprocessImage(imageDataUrl);
 
-        // 2. 更新加载提示为识别阶段
-        const progressEl = document.getElementById('ocrProgress');
-        if (progressEl) progressEl.textContent = '🔄 预处理完成，开始识别...';
-        const loadingText = document.querySelector('.ocr-loading-text');
-        if (loadingText) loadingText.textContent = '🔍 正在识别图片中的西班牙语文字...';
+        // 2. 更新提示：加载语言包
+        setLoadingText('📦 正在加载西班牙语语言包...');
+        setProgress('准备中 (1/2: spa 西班牙语)');
 
-        // 3. 调用 Tesseract，设置西班牙语字符白名单
-        const result = await Tesseract.recognize(
+        // 3. 第一次识别：西班牙语
+        const result1 = await Tesseract.recognize(
             processedDataUrl,
             'spa',
             {
                 logger: (m) => {
                     const el = document.getElementById('ocrProgress');
                     if (el && m.status) {
-                        let text = m.status;
+                        let text = `🇪🇸 西语识别: ${m.status}`;
                         if (m.progress !== undefined) {
                             text += ` (${Math.round(m.progress * 100)}%)`;
                         }
@@ -1450,40 +1460,68 @@ async function preprocessAndRunOCR(imageDataUrl) {
             }
         );
 
-        const rawText = result.data.text;
-        const confidence = result.data.confidence;
+        // 4. 第二次识别：简体中文
+        setLoadingText('📦 正在加载简体中文语言包...');
+        setProgress('准备中 (2/2: chi_sim 简体中文)');
+        const result2 = await Tesseract.recognize(
+            processedDataUrl,
+            'chi_sim',
+            {
+                logger: (m) => {
+                    const el = document.getElementById('ocrProgress');
+                    if (el && m.status) {
+                        let text = `🇨🇳 中文识别: ${m.status}`;
+                        if (m.progress !== undefined) {
+                            text += ` (${Math.round(m.progress * 100)}%)`;
+                        }
+                        el.textContent = text;
+                    }
+                }
+            }
+        );
 
-        // 解析提取出的西班牙语单词
-        const extractedWords = extractSpanishWords(rawText);
+        setLoadingText('🔗 正在配对西语-中文...');
+        setProgress('按行匹配中...');
 
-        if (extractedWords.length === 0) {
+        // 5. 基于行位置信息解析配对
+        const pairedWords = parseLinePairs(result1, result2);
+
+        if (pairedWords.length === 0) {
+            setLoadingText('⚠️ 未能识别出单词对');
             container.innerHTML = previewHtml + `<div class="ocr-tip" style="background:#fee2e2;border-left-color:var(--danger);color:#991b1b;">
-                ⚠️ 未能从图片中识别出西班牙语单词。<br>
-                请尝试：① 使用更清晰的图片 ② 增大字体 ③ 确保光线充足
+                ⚠️ 未能从图片中识别出西语-中文配对。<br>
+                请尝试：① 使用更清晰的图片 ② 确保图片为表格格式（左西语、右中文）③ 增大字体
             </div>
-            <div style="text-align:center;margin-top:12px;">
+            <div class="ocr-actions">
                 <button class="btn primary" onclick="preprocessAndRunOCR('${imageDataUrl}')">🔄 重新识别</button>
             </div>`;
+            setupOCRDragAndDrop();
             return;
         }
 
-        // 与词库匹配
-        const matchedWords = matchWithVocabulary(extractedWords);
-
-        ocrWords = matchedWords;
+        ocrWords = pairedWords;
         Storage.set('ocr_words', ocrWords);
 
-        // 显示结果
+        // 合并置信度取平均
+        const avgConfidence = Math.round((result1.data.confidence + result2.data.confidence) / 2);
+        const matchedCount = pairedWords.filter(w => w.matched).length;
+        const pendingCount = pairedWords.length - matchedCount;
+
+        // 6. 显示确认列表
+        setLoadingText('✅ 识别完成');
+        setProgress('渲染结果...');
+
         let resultHtml = previewHtml;
 
         resultHtml += `<div class="ocr-tip">
-            📊 识别置信度: <strong>${Math.round(confidence)}%</strong> · 
-            提取到 <strong>${extractedWords.length}</strong> 个西语单词 · 
-            <strong>${matchedWords.filter(w => w.matched).length}</strong> 个已匹配词库
-            ${confidence < 60 ? '<br>⚠️ 置信度较低，识别结果可能不准确，建议使用更清晰的图片。' : ''}
+            📊 平均置信度: <strong>${avgConfidence}%</strong> · 
+            提取到 <strong>${pairedWords.length}</strong> 个西语词 · 
+            <strong>${matchedCount}</strong> 个已匹配词库
+            ${pendingCount > 0 ? `· <strong style="color:var(--warning);">${pendingCount}</strong> 个待补充` : ''}
+            ${avgConfidence < 50 ? '<br>⚠️ 置信度较低，识别结果可能不准确，建议使用更清晰的图片。' : ''}
         </div>`;
 
-        resultHtml += renderOCRResults(true);
+        resultHtml += renderOCRConfirmList(pairedWords);
 
         container.innerHTML = resultHtml;
         setupOCRDragAndDrop();
@@ -1501,91 +1539,352 @@ async function preprocessAndRunOCR(imageDataUrl) {
     }
 }
 
-function extractSpanishWords(text) {
-    // 按换行/空格/标点分割
-    const rawWords = text.split(/[\s\n\r,.!?;:()\[\]{}""''「」【】、，。！？；：（）]+/);
-    const seen = new Set();
-    const result = [];
+/**
+ * 基于 Tesseract 的单词级位置信息（words 数组）来解析行，
+ * 对每行按水平位置分割左侧（西语）和右侧（中文）
+ */
+function parseLinePairs(resultSp, resultCn) {
+    // 从两个识别结果提取单词级数据（含包围盒）
+    const spWords = (resultSp.data.words || []).map(w => ({
+        text: w.text.trim(),
+        bbox: w.bbox || w.paragraph?.bbox || null,
+        line: null,
+        isSpanish: true
+    }));
 
-    for (let raw of rawWords) {
-        let word = raw.trim().toLowerCase();
-        // 跳过空字符串、纯数字、纯中文、太短或太长的
-        if (!word || word.length < 2 || word.length > 30) continue;
-        if (/^[\d\s]+$/.test(word)) continue;
-        if (/[\u4e00-\u9fff]/.test(word)) continue; // 跳过纯中文
-        if (/^[a-zA-Z]+$/.test(word) && !/[aeiouáéíóúü]/i.test(word)) continue; // 没有元音的不是西语
-        // 归一化特殊字符
-        word = word.replace(/[^a-záéíóúüñ]/g, '').trim();
-        if (!word || word.length < 2) continue;
-        if (seen.has(word)) continue;
-        seen.add(word);
-        result.push(word);
+    const cnWords = (resultCn.data.words || []).map(w => ({
+        text: w.text.trim(),
+        bbox: w.bbox || w.paragraph?.bbox || null,
+        line: null,
+        isSpanish: false
+    }));
+
+    // 合并所有单词并按行分组（使用 bbox 的 y 中心坐标聚类）
+    const allWords = [...spWords, ...cnWords].filter(w => w.text && w.bbox);
+    if (allWords.length === 0) {
+        // 回退：尝试用文本的换行分割
+        return fallbackLineParse(resultSp.data.text, resultCn.data.text);
     }
-    return result;
+
+    // 按 y 坐标中心值排序
+    allWords.sort((a, b) => a.bbox.y0 - b.bbox.y0);
+
+    // 聚类成行：相邻单词 y 中心差小于行高的一半则视为同一行
+    const LINE_THRESHOLD = 20; // 像素阈值
+    const lines = [];
+    let currentLine = [allWords[0]];
+
+    for (let i = 1; i < allWords.length; i++) {
+        const prev = allWords[i - 1].bbox;
+        const curr = allWords[i].bbox;
+        const prevCenterY = (prev.y0 + prev.y1) / 2;
+        const currCenterY = (curr.y0 + curr.y1) / 2;
+        const prevHeight = prev.y1 - prev.y0;
+        const threshold = Math.max(prevHeight * 0.6, LINE_THRESHOLD);
+
+        if (Math.abs(currCenterY - prevCenterY) < threshold) {
+            currentLine.push(allWords[i]);
+        } else {
+            lines.push(currentLine);
+            currentLine = [allWords[i]];
+        }
+    }
+    if (currentLine.length > 0) lines.push(currentLine);
+
+    // 对每一行，按 x 坐标分割左侧（西语）和右侧（中文）
+    const results = [];
+    const seen = new Set();
+
+    for (const lineWords of lines) {
+        // 如果行内只有一个词，尝试判断是西语还是中文
+        if (lineWords.length === 1) {
+            const w = lineWords[0];
+            if (w.isSpanish && /[a-záéíóúüñ]/i.test(w.text)) {
+                // 只有西语词，无中文释义
+                results.push({ es: cleanEsWord(w.text), cn: '', pending: true, matched: false, original: w.text });
+            }
+            continue;
+        }
+
+        // 按 x 坐标排序（左到右）
+        lineWords.sort((a, b) => a.bbox.x0 - b.bbox.x0);
+
+        // 寻找左半部的中点和右半部分
+        const lineWidth = lineWords[lineWords.length - 1].bbox.x1 - lineWords[0].bbox.x0;
+        const midX = lineWords[0].bbox.x0 + lineWidth * 0.4; // 40% 位置作为左右分界线
+
+        const leftParts = [];
+        const rightParts = [];
+
+        for (const w of lineWords) {
+            const wordCenterX = (w.bbox.x0 + w.bbox.x1) / 2;
+            if (wordCenterX < midX) {
+                leftParts.push(w);
+            } else {
+                rightParts.push(w);
+            }
+        }
+
+        // 左侧提取西语词
+        let esText = leftParts.filter(w => w.isSpanish).map(w => w.text).join(' ').trim();
+        // 右侧提取中文
+        let cnText = rightParts.filter(w => !w.isSpanish).map(w => w.text).join('').trim();
+
+        // 如果左侧没找到西语词，但左侧有内容，也尝试提取
+        if (!esText && leftParts.length > 0) {
+            esText = leftParts.map(w => w.text).join(' ').trim();
+        }
+        // 如果右侧没找到中文，但右侧有内容
+        if (!cnText && rightParts.length > 0) {
+            cnText = rightParts.map(w => w.text).join(' ').trim();
+        }
+
+        // 清理和规范化
+        esText = cleanEsWord(esText);
+        cnText = cnText.replace(/[^\u4e00-\u9fff\w\s]/g, '').trim();
+
+        if (esText && esText.length >= 2 && !seen.has(esText)) {
+            seen.add(esText);
+            const vocabInfo = matchFromVocab(esText);
+            results.push({
+                es: vocabInfo.es || esText,
+                original: esText,
+                cn: cnText || vocabInfo.cn || '',
+                matched: vocabInfo.matched || !!cnText,
+                customCn: cnText || vocabInfo.cn || '',
+                pending: !(vocabInfo.matched || !!cnText)
+            });
+        }
+    }
+
+    // 如果基于位置解析没有结果，回退到纯文本分割
+    if (results.length === 0) {
+        return fallbackLineParse(resultSp.data.text, resultCn.data.text);
+    }
+
+    return results;
 }
 
-function matchWithVocabulary(extractedWords) {
-    const level = 'A1';
-    const allVocab = VOCABULARY[level] || [];
-    const allEsWords = new Set(allVocab.map(v => v.es.toLowerCase().replace(/[^a-záéíóúüñ]/g, '')));
-
-    // 建立词根快速查找表 (归一化的)
-    const vocabMap = {};
-    allVocab.forEach(v => {
-        const key = v.es.toLowerCase().replace(/[^a-záéíóúüñ]/g, '');
-        vocabMap[key] = v;
-    });
+/**
+ * 回退方案：基于纯文本换行分割
+ */
+function fallbackLineParse(spText, cnText) {
+    const spLines = spText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+    const cnLines = cnText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
 
     const results = [];
     const seen = new Set();
 
-    for (const rawWord of extractedWords) {
-        const key = rawWord.toLowerCase().replace(/[^a-záéíóúüñ]/g, '');
-        if (seen.has(key)) continue;
-        seen.add(key);
+    // 尝试按行序号配对
+    const maxLines = Math.max(spLines.length, cnLines.length);
+    for (let i = 0; i < maxLines; i++) {
+        const spLine = spLines[i] || '';
+        const cnLine = cnLines[i] || '';
 
-        let matched = false;
-        let cn = '';
-        let matchedEs = rawWord;
-
-        // 精确匹配
-        if (vocabMap[key]) {
-            matched = true;
-            cn = vocabMap[key].cn;
-            matchedEs = vocabMap[key].es; // 用词库的标准写法
-        } else {
-            // 尝试部分匹配 (词根匹配: 比如 hablo 匹配 hablar)
-            for (const [vk, vv] of Object.entries(vocabMap)) {
-                if (key.length >= 4 && (key.startsWith(vk) || vk.startsWith(key))) {
-                    matched = true;
-                    cn = vv.cn;
-                    matchedEs = vv.es;
-                    break;
-                }
-                // 尝试去掉动词词尾
-                if (key.length >= 5 && (key.endsWith('ar') || key.endsWith('er') || key.endsWith('ir'))) {
-                    const stem = key.slice(0, -2);
-                    if (vk.startsWith(stem) && stem.length >= 3) {
-                        matched = true;
-                        cn = vv.cn;
-                        matchedEs = vv.es;
-                        break;
-                    }
-                }
-            }
-        }
-
-        results.push({
-            es: matchedEs,
-            original: rawWord,
-            cn: cn || '',
-            matched: matched,
-            customCn: cn || '',
-            pending: !matched
+        // 从西语行提取西语词
+        const esWords = spLine.split(/[\s,;:、，；：]+/).filter(w => {
+            const clean = w.replace(/[^a-záéíóúüñ]/gi, '');
+            return clean.length >= 2 && /[aeiouáéíóúü]/i.test(clean);
         });
+
+        // 从中文件提取中文字符
+        const cnChars = cnLine.replace(/[^\u4e00-\u9fff]/g, '').trim();
+
+        for (const es of esWords) {
+            const clean = cleanEsWord(es);
+            if (!clean || clean.length < 2 || seen.has(clean)) continue;
+            seen.add(clean);
+            const vocabInfo = matchFromVocab(clean);
+            results.push({
+                es: vocabInfo.es || clean,
+                original: clean,
+                cn: cnChars || vocabInfo.cn || '',
+                matched: vocabInfo.matched || !!cnChars,
+                customCn: cnChars || vocabInfo.cn || '',
+                pending: !(vocabInfo.matched || !!cnChars)
+            });
+        }
     }
 
     return results;
+}
+
+/** 清理西语词，去除标点、词性标记等 */
+function cleanEsWord(text) {
+    // 去除常见词性标注 (adj., adv., m., f., pron., prep., conj., interj., v., etc.)
+    let clean = text.replace(/\b(adj|adv|m|f|pron|prep|conj|interj|v|art|num|prep|s|pl)\b\.?/gi, '');
+    // 去除标点符号
+    clean = clean.replace(/[.,;:!?()\[\]{}"'¿¡«»*#/\\\-]/g, ' ');
+    // 去空格并归一化
+    clean = clean.trim().toLowerCase().replace(/[^a-záéíóúüñ]/g, '').trim();
+    return clean;
+}
+
+/** 从词库匹配西语词 */
+function matchFromVocab(word) {
+    const level = 'A1';
+    const allVocab = VOCABULARY[level] || [];
+    const key = word.toLowerCase().replace(/[^a-záéíóúüñ]/g, '');
+
+    // 精确匹配
+    for (const v of allVocab) {
+        const vKey = v.es.toLowerCase().replace(/[^a-záéíóúüñ]/g, '');
+        if (vKey === key) {
+            return { es: v.es, cn: v.cn, matched: true };
+        }
+    }
+
+    // 词根匹配
+    for (const v of allVocab) {
+        const vKey = v.es.toLowerCase().replace(/[^a-záéíóúüñ]/g, '');
+        if (key.length >= 4 && (key.startsWith(vKey) || vKey.startsWith(key))) {
+            return { es: v.es, cn: v.cn, matched: true };
+        }
+        // 动词词尾匹配
+        if (key.length >= 5 && (key.endsWith('ar') || key.endsWith('er') || key.endsWith('ir'))) {
+            const stem = key.slice(0, -2);
+            if (vKey.startsWith(stem) && stem.length >= 3) {
+                return { es: v.es, cn: v.cn, matched: true };
+            }
+        }
+    }
+
+    return { es: word, cn: '', matched: false };
+}
+
+/** 渲染确认列表：显示西语-中文配对，可逐条编辑 */
+function renderOCRConfirmList(pairedWords) {
+    const total = pairedWords.length;
+    const matchedCount = pairedWords.filter(w => w.matched).length;
+    const pendingCount = total - matchedCount;
+
+    let html = `<div class="ocr-word-count">
+        📋 共 <strong>${total}</strong> 条配对 · 
+        <span style="color:var(--success);">${matchedCount} 条已确认</span>
+        ${pendingCount > 0 ? `· <span style="color:var(--warning);">${pendingCount} 条待编辑</span>` : ''}
+    </div>`;
+
+    // 逐条确认列表
+    html += '<div class="ocr-word-list">';
+    pairedWords.forEach((word, idx) => {
+        const statusClass = word.matched && word.cn ? 'matched' : 'pending';
+        const statusText = word.matched && word.cn ? '✅ 已确认' : '✏️ 待编辑';
+        const cnPlaceholder = word.cn || '请输入中文释义...';
+
+        html += `<div class="ocr-confirm-item" id="ocrConfirmItem_${idx}" style="background:var(--card-bg);border-radius:var(--radius-sm);box-shadow:var(--shadow);padding:12px 16px;margin-bottom:10px;">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                <span class="ocr-word-es" style="flex:0 0 auto;">${word.es}</span>
+                <span class="ocr-word-status ${statusClass}">${statusText}</span>
+                <span style="color:var(--text-secondary);font-size:13px;">⬅️</span>
+                <input type="text" class="ocr-word-cn-input" id="ocrConfirmCn_${idx}" 
+                    value="${word.cn}" placeholder="${cnPlaceholder}" 
+                    style="flex:1;min-width:100px;"
+                    onchange="updateOCRConfirmPair(${idx}, this.value)">
+                <button class="ocr-word-speak" onclick="Speaker.speak('${word.es.replace(/'/g, "\\'")}')" title="朗读">🔊</button>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:6px;font-size:12px;color:var(--text-secondary);">
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
+                    <input type="checkbox" id="ocrConfirmCheck_${idx}" ${word.matched && word.cn ? 'checked' : ''} onchange="toggleOCRConfirmPair(${idx})">
+                    ✅ 确认无误
+                </label>
+                <span>识别原文: "${word.original || word.es}"</span>
+            </div>
+        </div>`;
+    });
+    html += '</div>';
+
+    // 操作按钮
+    html += `<div class="ocr-actions">
+        <button class="btn primary" onclick="addConfirmedOCRWords()">
+            📚 将已确认的配对加入单词记忆
+        </button>
+        <button class="btn" onclick="clearOCRResults()">🗑️ 清空记录</button>
+    </div>`;
+
+    return html;
+}
+
+/** 更新单条配对的释义 */
+function updateOCRConfirmPair(idx, value) {
+    if (ocrWords[idx]) {
+        ocrWords[idx].cn = value.trim();
+        ocrWords[idx].customCn = value.trim();
+        ocrWords[idx].pending = !value.trim();
+        if (value.trim()) ocrWords[idx].matched = true;
+        Storage.set('ocr_words', ocrWords);
+        // 更新状态标签
+        const statusEl = document.querySelector(`#ocrConfirmItem_${idx} .ocr-word-status`);
+        if (statusEl) {
+            statusEl.className = `ocr-word-status ${value.trim() ? 'matched' : 'pending'}`;
+            statusEl.textContent = value.trim() ? '✅ 已确认' : '✏️ 待编辑';
+        }
+        const checkEl = document.getElementById(`ocrConfirmCheck_${idx}`);
+        if (checkEl) checkEl.checked = !!value.trim();
+    }
+}
+
+/** 切换确认状态 */
+function toggleOCRConfirmPair(idx) {
+    if (ocrWords[idx]) {
+        const checkEl = document.getElementById(`ocrConfirmCheck_${idx}`);
+        const inputEl = document.getElementById(`ocrConfirmCn_${idx}`);
+        if (checkEl && inputEl) {
+            if (checkEl.checked && !inputEl.value.trim()) {
+                checkEl.checked = false;
+                showToast('⚠️ 请先填写中文释义');
+                return;
+            }
+            ocrWords[idx].matched = checkEl.checked;
+            if (checkEl.checked) {
+                ocrWords[idx].pending = false;
+            }
+            Storage.set('ocr_words', ocrWords);
+            const statusEl = document.querySelector(`#ocrConfirmItem_${idx} .ocr-word-status`);
+            if (statusEl) {
+                statusEl.className = `ocr-word-status ${checkEl.checked ? 'matched' : 'pending'}`;
+                statusEl.textContent = checkEl.checked ? '✅ 已确认' : '✏️ 待编辑';
+            }
+        }
+    }
+}
+
+/** 将已确认的配对加入词库 */
+function addConfirmedOCRWords() {
+    const confirmed = ocrWords.filter(w => w.matched && w.cn && w.cn.trim().length > 0);
+
+    if (confirmed.length === 0) {
+        showToast('⚠️ 没有已确认的配对，请先勾选确认框');
+        return;
+    }
+
+    const customVocab = Storage.get('custom_vocab', []);
+    let addedCount = 0;
+
+    confirmed.forEach(w => {
+        const exists = customVocab.some(v => v.es.toLowerCase() === w.es.toLowerCase());
+        if (!exists) {
+            customVocab.push({
+                es: w.es,
+                cn: w.cn,
+                source: 'ocr',
+                addedAt: new Date().toISOString()
+            });
+            addedCount++;
+        }
+    });
+
+    if (addedCount > 0) {
+        Storage.set('custom_vocab', customVocab);
+        // 添加到笔记
+        const noteText = confirmed.map(w => `${w.es} = ${w.cn}`).join('\n');
+        if (noteText) {
+            Storage.saveTodayNote(`📷 [图片识词] ${noteText}`);
+        }
+        showToast(`✅ 已将 ${addedCount} 个单词加入学习词库`);
+        renderOCR();
+    } else {
+        showToast('⚠️ 这些词已经添加过了');
+    }
 }
 
 function renderOCRResults(showActions) {
