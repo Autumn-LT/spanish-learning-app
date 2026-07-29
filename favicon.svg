@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="flag" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#C60B1E"/>
+      <stop offset="33%" stop-color="#C60B1E"/>
+      <stop offset="33%" stop-color="#FFC400"/>
+      <stop offset="66%" stop-color="#FFC400"/>
+      <stop offset="66%" stop-color="#C60B1E"/>
+      <stop offset="100%" stop-color="#C60B1E"/>
+    </linearGradient>
+  </defs>
+  <!-- Spanish flag background with rounded corners -->
+  <rect width="100" height="100" rx="16" ry="16" fill="url(#flag)"/>
+  <!-- Inner border -->
+  <rect x="6" y="6" width="88" height="88" rx="12" ry="12" fill="none" stroke="rgba(255,255,255,0.25)" stroke-width="2"/>
+  <!-- Open book icon -->
+  <g transform="translate(50,50)" fill="#FFF">
+    <!-- Left page -->
+    <path d="M-8,-30 C-8,-30 -26,-34 -36,-28 L-36,28 C-26,22 -8,24 -8,30 Z" stroke="#FFF" stroke-width="2.5" stroke-linejoin="round" fill="none"/>
+    <!-- Right page -->
+    <path d="M8,-30 C8,-30 26,-34 36,-28 L36,28 C26,22 8,24 8,30 Z" stroke="#FFF" stroke-width="2.5" stroke-linejoin="round" fill="none"/>
+    <!-- Book spine -->
+    <line x1="0" y1="-32" x2="0" y2="32" stroke="#FFF" stroke-width="3" stroke-linecap="round"/>
+    <!-- "E" letter on pages -->
+    <text x="0" y="12" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="900" font-size="46" fill="#C60B1E">E</text>
+  </g>
+</svg>
