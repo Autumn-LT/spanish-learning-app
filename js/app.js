@@ -1309,24 +1309,113 @@ function handleOCRFile(event) {
     const reader = new FileReader();
     reader.onload = function(e) {
         ocrImageData = e.target.result;
-        startOCR(ocrImageData);
+        // 预处理图片后再调用 OCR
+        preprocessAndRunOCR(ocrImageData);
     };
     reader.readAsDataURL(file);
 }
 
-async function startOCR(imageDataUrl) {
+/**
+ * 图片预处理：灰度化 + 提升对比度 + 锐化
+ * 在 Canvas 上操作，返回预处理后的 DataURL
+ */
+function preprocessImage(imageDataUrl) {
+    return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = function() {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+
+            // 保持原尺寸
+            canvas.width = img.width;
+            canvas.height = img.height;
+
+            // 1. 先绘制原图
+            ctx.drawImage(img, 0, 0);
+
+            // 2. 获取像素数据
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const data = imageData.data;
+
+            // 3. 灰度化 + 自动对比度增强（使用加权灰度 + 对比度拉伸）
+            // 先计算像素亮度分布
+            let minVal = 255, maxVal = 0;
+            const grayscale = new Uint8Array(data.length / 4);
+            for (let i = 0; i < data.length; i += 4) {
+                // 加权灰度（感知亮度）
+                const gray = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
+                grayscale[i / 4] = gray;
+                if (gray < minVal) minVal = gray;
+                if (gray > maxVal) maxVal = gray;
+            }
+
+            // 对比度拉伸：将 [minVal, maxVal] 映射到 [0, 255]
+            const range = maxVal - minVal;
+            const scale = range > 20 ? 255 / range : 1; // 避免除零
+            const offset = minVal;
+
+            for (let i = 0; i < data.length; i += 4) {
+                let gray = grayscale[i / 4];
+                // 对比度拉伸
+                let adjusted = (gray - offset) * scale;
+                // 限幅 [0, 255]
+                adjusted = Math.max(0, Math.min(255, adjusted));
+                // 额外轻微提升对比度 (s-curve)
+                if (adjusted < 128) {
+                    adjusted = adjusted * 0.85; // 暗部更暗
+                } else {
+                    adjusted = 255 - (255 - adjusted) * 0.85; // 亮部更亮
+                }
+                adjusted = Math.max(0, Math.min(255, Math.round(adjusted)));
+
+                // 如果原图饱和度较高（彩色文字），保留彩色而非全灰可能更好。
+                // 但 OCR 通常灰度图效果更好，这里输出灰度
+                data[i] = adjusted;
+                data[i + 1] = adjusted;
+                data[i + 2] = adjusted;
+                // data[i+3] = alpha 保持不变
+            }
+
+            // 4. 轻微锐化（3x3 拉普拉斯锐化核）
+            const sharpened = new Uint8ClampedArray(data);
+            const w = canvas.width, h = canvas.height;
+            for (let y = 1; y < h - 1; y++) {
+                for (let x = 1; x < w - 1; x++) {
+                    const idx = (y * w + x) * 4;
+                    // 拉普拉斯核: [[0,-1,0],[-1,5,-1],[0,-1,0]]
+                    const center = data[idx];
+                    const top    = data[((y - 1) * w + x) * 4];
+                    const bottom = data[((y + 1) * w + x) * 4];
+                    const left   = data[(y * w + (x - 1)) * 4];
+                    const right  = data[(y * w + (x + 1)) * 4];
+                    let val = (center * 5) - top - bottom - left - right;
+                    val = Math.max(0, Math.min(255, val));
+                    sharpened[idx] = val;
+                    sharpened[idx + 1] = val;
+                    sharpened[idx + 2] = val;
+                }
+            }
+
+            ctx.putImageData(new ImageData(sharpened, w, h), 0, 0);
+            resolve(canvas.toDataURL('image/png'));
+        };
+        img.src = imageDataUrl;
+    });
+}
+
+async function preprocessAndRunOCR(imageDataUrl) {
     const container = document.getElementById('ocrContent');
     if (!container) return;
 
     // 显示加载动画
     container.innerHTML = `<div class="ocr-loading" id="ocrLoading">
         <div class="ocr-loading-spinner"></div>
-        <div class="ocr-loading-text">🔍 正在识别图片中的西班牙语文字...</div>
-        <div class="ocr-loading-progress" id="ocrProgress">准备中...</div>
-        <div style="margin-top:16px;font-size:12px;color:var(--text-secondary);">首次识别需要下载约 2MB 的西班牙语语言包，后续识别会更快</div>
+        <div class="ocr-loading-text">🖼️ 正在预处理图片...</div>
+        <div class="ocr-loading-progress" id="ocrProgress">灰度化 + 对比度增强</div>
+        <div style="margin-top:16px;font-size:12px;color:var(--text-secondary);">图片预处理完成后将自动开始文字识别</div>
     </div>`;
 
-    // 显示预览
+    // 构建预览HTML
     const previewHtml = `<div class="ocr-upload-area has-image" onclick="document.getElementById('ocrFileInput').click()">
         <img src="${imageDataUrl}" class="ocr-preview-img" alt="上传的图片">
         <div style="font-size:12px;color:var(--text-secondary);margin-top:8px;">👆 点击更换图片</div>
@@ -1334,18 +1423,28 @@ async function startOCR(imageDataUrl) {
     </div>`;
 
     try {
+        // 1. 预处理图片
+        const processedDataUrl = await preprocessImage(imageDataUrl);
+
+        // 2. 更新加载提示为识别阶段
+        const progressEl = document.getElementById('ocrProgress');
+        if (progressEl) progressEl.textContent = '🔄 预处理完成，开始识别...';
+        const loadingText = document.querySelector('.ocr-loading-text');
+        if (loadingText) loadingText.textContent = '🔍 正在识别图片中的西班牙语文字...';
+
+        // 3. 调用 Tesseract，设置西班牙语字符白名单
         const result = await Tesseract.recognize(
-            imageDataUrl,
-            'spa',  // 西班牙语语言包
+            processedDataUrl,
+            'spa',
             {
                 logger: (m) => {
-                    const progressEl = document.getElementById('ocrProgress');
-                    if (progressEl && m.status) {
+                    const el = document.getElementById('ocrProgress');
+                    if (el && m.status) {
                         let text = m.status;
                         if (m.progress !== undefined) {
                             text += ` (${Math.round(m.progress * 100)}%)`;
                         }
-                        progressEl.textContent = text;
+                        el.textContent = text;
                     }
                 }
             }
@@ -1363,7 +1462,7 @@ async function startOCR(imageDataUrl) {
                 请尝试：① 使用更清晰的图片 ② 增大字体 ③ 确保光线充足
             </div>
             <div style="text-align:center;margin-top:12px;">
-                <button class="btn primary" onclick="startOCR('${imageDataUrl}')">🔄 重新识别</button>
+                <button class="btn primary" onclick="preprocessAndRunOCR('${imageDataUrl}')">🔄 重新识别</button>
             </div>`;
             return;
         }
@@ -1396,7 +1495,7 @@ async function startOCR(imageDataUrl) {
             请检查网络连接后重试，或尝试更换图片。
         </div>
         <div style="text-align:center;margin-top:12px;">
-            <button class="btn primary" onclick="startOCR('${imageDataUrl}')">🔄 重试</button>
+            <button class="btn primary" onclick="preprocessAndRunOCR('${imageDataUrl}')">🔄 重试</button>
         </div>`;
         setupOCRDragAndDrop();
     }
