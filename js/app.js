@@ -1385,45 +1385,41 @@ async function runBaiduOCRViaProxy(imageDataUrl) {
             throw new Error(`百度API错误 (${result.error_code}): ${result.error_msg}`);
         }
 
-        setLoadingText('🔗 正在解析表格内容，配对西语-中文...');
+        setLoadingText('🔗 正在解析表格内容...');
         setProgress('解析单元格数据...');
 
-        // 4. 解析表格结果
+        // 4. 先展示原始 API 返回数据（方便调试）
+        const rawDataHtml = renderRawApiResponse(result);
+
+        // 5. 解析表格结果
         const pairedWords = parseBaiduTableResult(result);
 
-        if (pairedWords.length === 0) {
-            setLoadingText('⚠️ 未能识别出单词对');
-            container.innerHTML = previewHtml + `<div class="ocr-tip" style="background:#fee2e2;border-left-color:var(--danger);color:#991b1b;">
-                ⚠️ 未能从图片的表格中识别出西语-中文配对。<br>
-                请尝试：① 使用更清晰的图片 ② 确保图片为表格格式（左西语、右中文）③ 图片不要倾斜
-            </div>
-            <div class="ocr-actions">
-                <button class="btn primary" onclick="runBaiduOCRViaProxy('${imageDataUrl}')">🔄 重新识别</button>
-            </div>`;
-            setupOCRDragAndDrop();
-            return;
-        }
-
-        ocrWords = pairedWords;
-        Storage.set('ocr_words', ocrWords);
-
-        const matchedCount = pairedWords.filter(w => w.matched).length;
-        const pendingCount = pairedWords.length - matchedCount;
-
-        // 5. 显示确认列表
+        // 6. 显示结果
         setLoadingText('✅ 识别完成');
         setProgress('渲染结果...');
 
         let resultHtml = previewHtml;
 
-        resultHtml += `<div class="ocr-tip">
-            ✅ 百度表格识别完成 · 
-            提取到 <strong>${pairedWords.length}</strong> 个配对 · 
-            <strong>${matchedCount}</strong> 个已匹配词库
-            ${pendingCount > 0 ? `· <strong style="color:var(--warning);">${pendingCount}</strong> 个待补充` : ''}
-        </div>`;
+        if (pairedWords.length === 0) {
+            resultHtml += `<div class="ocr-tip" style="background:#fee2e2;border-left-color:var(--danger);color:#991b1b;">
+                ⚠️ 未能从图片中解析出西语-中文配对。<br>
+                请尝试：① 使用更清晰的图片 ② 确保图片为表格格式（左西语、右中文）③ 图片不要倾斜<br>
+                <strong>提示：</strong>下方为百度API的原始返回数据，请检查是否识别出了文字内容和位置信息。
+            </div>`;
+        } else {
+            const matchedCount = pairedWords.filter(w => w.matched).length;
+            const pendingCount = pairedWords.length - matchedCount;
+            resultHtml += `<div class="ocr-tip" style="background:#dbeafe;border-left-color:var(--primary);color:#1e40af;">
+                ✅ 百度表格识别完成 · 
+                提取到 <strong>${pairedWords.length}</strong> 个配对 · 
+                <strong>${matchedCount}</strong> 个已匹配词库
+                ${pendingCount > 0 ? `· <strong style="color:var(--warning);">${pendingCount}</strong> 个待补充` : ''}
+            </div>`;
+            resultHtml += renderOCRConfirmList(pairedWords);
+        }
 
-        resultHtml += renderOCRConfirmList(pairedWords);
+        // 始终显示原始数据用于调试
+        resultHtml += rawDataHtml;
 
         container.innerHTML = resultHtml;
         setupOCRDragAndDrop();
@@ -1610,6 +1606,76 @@ function fallbackBaiduParse(resultData) {
     }
 
     return results;
+}
+
+/**
+ * 渲染百度 API 原始返回数据，方便调试配对问题
+ */
+function renderRawApiResponse(result) {
+    const body = result.result?.body || [];
+    
+    let html = `<details style="margin-top:16px;background:var(--card-bg);border-radius:var(--radius);padding:12px 16px;box-shadow:var(--shadow);">
+        <summary style="font-size:14px;font-weight:600;cursor:pointer;color:var(--text-secondary);">
+            🔍 查看百度API原始返回数据 (${body.length} 个单元格)
+        </summary>
+        <div style="margin-top:12px;">`;
+
+    // 按行列分组的表格展示
+    if (body.length > 0) {
+        // 找出最大行列
+        let maxRow = 0, maxCol = 0;
+        body.forEach(cell => {
+            if (cell.row > maxRow) maxRow = cell.row;
+            if (cell.col > maxCol) maxCol = cell.col;
+        });
+
+        // 构建网格
+        const cellMap = {};
+        body.forEach(cell => {
+            const key = `${cell.row},${cell.col}`;
+            if (!cellMap[key]) cellMap[key] = [];
+            cellMap[key].push(cell.words || '');
+        });
+
+        html += `<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:12px;">
+            <tr><th style="border:1px solid #e2e8f0;padding:6px;background:#f1f5f9;">行/列</th>`;
+        for (let c = 0; c <= maxCol; c++) {
+            html += `<th style="border:1px solid #e2e8f0;padding:6px;background:#f1f5f9;text-align:center;">列 ${c}</th>`;
+        }
+        html += `</tr>`;
+        for (let r = 0; r <= maxRow; r++) {
+            html += `<tr><td style="border:1px solid #e2e8f0;padding:6px;font-weight:600;background:#f8fafc;text-align:center;">行 ${r}</td>`;
+            for (let c = 0; c <= maxCol; c++) {
+                const key = `${r},${c}`;
+                const words = (cellMap[key] || []).join(' ');
+                const isSpanish = /[a-záéíóúüñ]/i.test(words) && !/[\u4e00-\u9fff]/.test(words);
+                const isChinese = /[\u4e00-\u9fff]/.test(words);
+                const bgColor = isSpanish ? '#dbeafe' : (isChinese ? '#d1fae5' : 'transparent');
+                html += `<td style="border:1px solid #e2e8f0;padding:6px;background:${bgColor};word-break:break-all;">${escapeHtml(words) || '—'}</td>`;
+            }
+            html += `</tr>`;
+        }
+        html += `</table>`;
+        html += `<div style="font-size:11px;color:var(--text-secondary);">
+            <span style="display:inline-block;width:12px;height:12px;background:#dbeafe;border:1px solid #e2e8f0;vertical-align:middle;margin-right:4px;"></span> 西语
+            <span style="display:inline-block;width:12px;height:12px;background:#d1fae5;border:1px solid #e2e8f0;vertical-align:middle;margin:0 4px 0 12px;"></span> 中文
+        </div>`;
+    }
+
+    // 完整 JSON 数据（折叠）
+    const jsonStr = JSON.stringify(result, null, 2);
+    html += `<details style="margin-top:8px;">
+        <summary style="font-size:12px;cursor:pointer;color:var(--text-secondary);">📄 完整 JSON 响应</summary>
+        <pre style="font-size:11px;background:#f8fafc;padding:12px;border-radius:6px;overflow-x:auto;max-height:400px;overflow-y:auto;margin-top:8px;white-space:pre-wrap;word-break:break-all;">${escapeHtml(jsonStr)}</pre>
+    </details>`;
+
+    // 同时也输出到浏览器控制台方便复制
+    console.log('===== 百度OCR完整返回数据 =====');
+    console.log(JSON.stringify(result, null, 2));
+    console.log('===== 结束 =====');
+
+    html += `</div></details>`;
+    return html;
 }
 
 function renderOCRResults(showActions) {
