@@ -1495,62 +1495,48 @@ function parseBaiduTableResult(result) {
         }
     }
 
-    // 对每一行，尝试配对：左侧列为西语，右侧列为中文
+    // 根据实际表格结构提取配对：
+    // 每行有两组「西语-中文」：
+    //   组1: col0=西语词,  col1=词性(可忽略),  col2=(空),  col3=中文释义
+    //   组2: col4=西语词,  col5=词性(可忽略),  col6=中文释义
     const results = [];
     const seen = new Set();
-    const level = 'A1';
-    const allVocab = VOCABULARY[level] || [];
 
     for (let r = startRow; r <= maxRow; r++) {
-        const rowCells = grid[r].filter(c => c.trim().length > 0);
-        if (rowCells.length === 0) continue;
+        const cell0 = (grid[r][0] || '').trim();
+        const cell3 = (grid[r][3] || '').trim();
+        const cell4 = (grid[r][4] || '').trim();
+        const cell6 = (grid[r][6] || '').trim();
 
-        // 尝试用两列模式：第1列 = 西语，第2列 = 中文
-        let esText = '', cnText = '';
-
-        // 找到第一个可能是西语词的列
-        for (let c = 0; c <= maxCol; c++) {
-            const cellText = (grid[r][c] || '').trim();
-            if (!cellText) continue;
-
-            // 检测是否是西语（含拉丁字母和西语特殊字符）
-            const cleanLatin = cellText.replace(/[^a-záéíóúüñ\s]/gi, '');
-            const latinRatio = cleanLatin.length / Math.max(cellText.length, 1);
-
-            if (latinRatio > 0.5 && /[aeiouáéíóúü]/i.test(cellText)) {
-                // 这一列是西语
-                if (!esText) {
-                    esText = cellText;
-                } else {
-                    // 已有西语，说明这一行可能有更多列
-                    cnText = cellText;
-                }
-            } else if (/[\u4e00-\u9fff]/.test(cellText)) {
-                // 这一列是中文
-                cnText = cellText;
-            } else if (!esText) {
-                // 不确定类型，当作西语尝试
-                esText = cellText;
-            } else {
-                cnText = cellText;
-            }
+        // 处理第一组: col0(西语) -> col3(中文)
+        const es1 = cleanEsWord(cell0);
+        const cn1 = cell3.replace(/[^\u4e00-\u9fff\w\s]/g, '').trim();
+        if (es1 && es1.length >= 2 && !seen.has(es1)) {
+            seen.add(es1);
+            const vocabInfo = matchFromVocab(es1);
+            results.push({
+                es: vocabInfo.es || es1,
+                original: cell0,
+                cn: cn1 || vocabInfo.cn || '',
+                matched: vocabInfo.matched || !!cn1,
+                customCn: cn1 || vocabInfo.cn || '',
+                pending: !(vocabInfo.matched || !!cn1)
+            });
         }
 
-        // 清理
-        esText = cleanEsWord(esText);
-        cnText = cnText.replace(/[^\u4e00-\u9fff\w\s]/g, '').trim();
-
-        if (esText && esText.length >= 2 && !seen.has(esText)) {
-            seen.add(esText);
-            // 从词库匹配
-            const vocabInfo = matchFromVocab(esText);
+        // 处理第二组: col4(西语) -> col6(中文)（注意 col4 可能和 col0 相同或为空）
+        const es2 = cleanEsWord(cell4);
+        const cn2 = cell6.replace(/[^\u4e00-\u9fff\w\s]/g, '').trim();
+        if (es2 && es2.length >= 2 && !seen.has(es2)) {
+            seen.add(es2);
+            const vocabInfo = matchFromVocab(es2);
             results.push({
-                es: vocabInfo.es || esText,
-                original: grid[r][0] || esText, // 原文保留
-                cn: cnText || vocabInfo.cn || '',
-                matched: vocabInfo.matched || !!cnText,
-                customCn: cnText || vocabInfo.cn || '',
-                pending: !(vocabInfo.matched || !!cnText)
+                es: vocabInfo.es || es2,
+                original: cell4,
+                cn: cn2 || vocabInfo.cn || '',
+                matched: vocabInfo.matched || !!cn2,
+                customCn: cn2 || vocabInfo.cn || '',
+                pending: !(vocabInfo.matched || !!cn2)
             });
         }
     }
