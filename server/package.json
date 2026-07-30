@@ -1,0 +1,9 @@
+{
+  "name": "baidu-ocr-proxy",
+  "version": "1.0.0",
+  "description": "本地代理服务器 - 转发百度智能云 OCR 请求（解决浏览器 CORS 限制）",
+  "main": "proxy.js",
+  "scripts": {
+    "start": "node proxy.js"
+  }
+}

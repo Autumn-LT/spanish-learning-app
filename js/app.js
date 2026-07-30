@@ -1303,6 +1303,9 @@ function setupOCRDragAndDrop() {
     });
 }
 
+// ===== 本地代理服务器地址 =====
+const OCR_PROXY_URL = 'http://127.0.0.1:3456';
+
 function handleOCRFile(event) {
     const file = event.target.files[0];
     if (!file) return;
@@ -1310,52 +1313,23 @@ function handleOCRFile(event) {
     const reader = new FileReader();
     reader.onload = function(e) {
         ocrImageData = e.target.result;
-        // 用百度API识别
-        runBaiduTableOCR(ocrImageData);
+        // 通过本地代理服务器调用百度OCR
+        runBaiduOCRViaProxy(ocrImageData);
     };
     reader.readAsDataURL(file);
 }
 
-// ===== 百度智能云鉴权 =====
-let baiduAccessToken = null;
-let baiduTokenExpiry = 0;
-
-async function getBaiduAccessToken() {
-    // 如果已有未过期的 token，直接返回
-    if (baiduAccessToken && Date.now() < baiduTokenExpiry) {
-        return baiduAccessToken;
-    }
-
-    try {
-        const url = `${BAIDU_OCR_CONFIG.tokenUrl}?grant_type=client_credentials&client_id=${BAIDU_OCR_CONFIG.apiKey}&client_secret=${BAIDU_OCR_CONFIG.secretKey}`;
-        const resp = await fetch(url);
-        const data = await resp.json();
-
-        if (data.access_token) {
-            baiduAccessToken = data.access_token;
-            // token 有效期 30 天，提前 1 天刷新
-            baiduTokenExpiry = Date.now() + (data.expires_in - 86400) * 1000;
-            return baiduAccessToken;
-        } else {
-            throw new Error(data.error_description || '获取 Access Token 失败');
-        }
-    } catch (err) {
-        console.error('Baidu Auth Error:', err);
-        throw new Error('获取百度API鉴权失败: ' + err.message);
-    }
-}
-
-// ===== 调用百度表格文字识别V2 =====
-async function runBaiduTableOCR(imageDataUrl) {
+// ===== 通过本地代理调用百度表格文字识别 =====
+async function runBaiduOCRViaProxy(imageDataUrl) {
     const container = document.getElementById('ocrContent');
     if (!container) return;
 
     // 显示加载动画
     container.innerHTML = `<div class="ocr-loading" id="ocrLoading">
         <div class="ocr-loading-spinner"></div>
-        <div class="ocr-loading-text">🔑 正在获取百度API鉴权...</div>
-        <div class="ocr-loading-progress" id="ocrProgress">请求 access_token</div>
-        <div style="margin-top:16px;font-size:12px;color:var(--text-secondary);">使用百度智能云表格文字识别V2</div>
+        <div class="ocr-loading-text">📤 正在通过本地代理发送图片...</div>
+        <div class="ocr-loading-progress" id="ocrProgress">连接代理服务器...</div>
+        <div style="margin-top:16px;font-size:12px;color:var(--text-secondary);">使用本地代理 → 百度智能云表格文字识别V2</div>
     </div>`;
 
     function setProgress(text) {
@@ -1374,31 +1348,39 @@ async function runBaiduTableOCR(imageDataUrl) {
     </div>`;
 
     try {
-        // 1. 获取 access_token
-        setLoadingText('🔑 正在获取百度API鉴权...');
-        setProgress('获取 access_token...');
-        const token = await getBaiduAccessToken();
+        // 1. 检查代理服务器是否运行
+        setLoadingText('🔌 检查本地代理服务器...');
+        setProgress('连接中...');
+        try {
+            const healthResp = await fetch(`${OCR_PROXY_URL}/health`);
+            if (!healthResp.ok) throw new Error('代理未响应');
+        } catch (e) {
+            throw new Error(`本地代理服务器未运行！请先启动代理:\n   终端执行: cd Spanish/server && node proxy.js\n\n   或者使用 npm:\n   cd Spanish/server && npm start\n\n详细错误: ${e.message}`);
+        }
 
         // 2. 将图片转为 base64（去掉 data:image/... 前缀）
-        setLoadingText('📤 正在上传图片到百度API...');
+        setLoadingText('📤 正在上传图片到代理服务器...');
         setProgress('转换图片格式...');
         const base64Data = imageDataUrl.replace(/^data:image\/[a-z]+;base64,/, '');
-        
-        // 3. 调用表格文字识别 V2 接口
+
+        // 3. 通过代理调用综合接口（自动获取 token + 识别）
         setProgress('🔄 调用表格文字识别...');
-        const ocrUrl = `${BAIDU_OCR_CONFIG.tableOcrUrl}?access_token=${token}`;
-        const resp = await fetch(ocrUrl, {
+        setLoadingText('🔍 代理正在请求百度API...');
+        const resp = await fetch(`${OCR_PROXY_URL}/ocr/table/auto`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
             body: new URLSearchParams({
-                image: base64Data,
-                // result_type 为 excel 时返回单元格坐标 + 内容
-                result_type: 'json'
+                api_key: BAIDU_OCR_CONFIG.apiKey,
+                secret_key: BAIDU_OCR_CONFIG.secretKey,
+                image: base64Data
             })
         });
 
         const result = await resp.json();
 
+        if (result.error) {
+            throw new Error(result.error);
+        }
         if (result.error_code) {
             throw new Error(`百度API错误 (${result.error_code}): ${result.error_msg}`);
         }
@@ -1416,7 +1398,7 @@ async function runBaiduTableOCR(imageDataUrl) {
                 请尝试：① 使用更清晰的图片 ② 确保图片为表格格式（左西语、右中文）③ 图片不要倾斜
             </div>
             <div class="ocr-actions">
-                <button class="btn primary" onclick="runBaiduTableOCR('${imageDataUrl}')">🔄 重新识别</button>
+                <button class="btn primary" onclick="runBaiduOCRViaProxy('${imageDataUrl}')">🔄 重新识别</button>
             </div>`;
             setupOCRDragAndDrop();
             return;
@@ -1456,7 +1438,7 @@ async function runBaiduTableOCR(imageDataUrl) {
             ❌ ${errMsg}
         </div>
         <div class="ocr-actions">
-            <button class="btn primary" onclick="runBaiduTableOCR('${imageDataUrl}')">🔄 重试</button>
+            <button class="btn primary" onclick="runBaiduOCRViaProxy('${imageDataUrl}')">🔄 重试</button>
         </div>`;
         setupOCRDragAndDrop();
     }
